@@ -5,21 +5,161 @@ output:
     keep_md: true
 ---
 
+```{r setoptions,echo=FALSE}
+library(knitr)
+opts_chunk$set(echo=TRUE)
+```
+
+## Setup
+
+First let's load the libraries that we'll be using.
+```{r loadlibs,message=FALSE}
+# Sometimes these give warning message (not shown)
+library(dplyr)
+library(lattice)
+```
+
 
 ## Loading and preprocessing the data
 
+If the data is not already downloaded, it may be obtained 
+[here](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip).
 
+If not already, rename the downloaded archive to activity.zip
+
+Unpack the zip file and load the data:
+```{r unpackdata}
+unzip("activity.zip")
+activity <- read.csv("activity.csv", colClasses = c("integer", "Date", "integer"))
+```
+There are a total of 17,568 observations in this dataset with the following variables
+The variables included in this dataset are:
+
+- steps: Number of steps taking in a 5-minute interval (missing values are coded as NA)
+
+- date: The date on which the measurement was taken in YYYY-MM-DD format
+
+- interval: Identifier for the 5-minute interval in which measurement was taken
+```{r strdata}
+str(activity)
+```
 
 ## What is mean total number of steps taken per day?
+First lets create a data frame with the number of steps summed for each day
+```{r stepsPerDay}
+daily_steps <- activity %>% filter(!is.na(steps)) %>% group_by(date) %>% summarize(steps=sum(steps))
+daily_steps
+```
+Let's look at the distribution of those totals:
+```{r seeStepsPerDay}
+hist(daily_steps$steps, col = "blue", breaks = 15,
+     xlab = "Number of daily Steps", main="Histogram of Daily Steps")
+```
 
-
+By this diagram, it appears that the mean is likely to fall somewhere near 10,000 steps.
+```{r meanAndMedian}
+daily_stats <- daily_steps %>% summarise(mean=mean(steps), median=median(steps))
+daily_stats
+```
 
 ## What is the average daily activity pattern?
+Compute average steps for each 5 minute interval
+```{r fiveMinAverages}
+interval_means <- activity %>% group_by(interval) %>% summarise(mean = mean(steps, na.rm = TRUE))
+str(interval_means)
+```
+Take a look as a time series plot.
+```{r plotIntervalMeans}
+plot(interval_means, type="l", 
+     xlab="Interval",
+     ylab="Mean Steps over Days",
+     main="Avarage Steps per 5-minute Interval of the Day")
+```
 
-
+Next, show the 5-minute interval, on average across all the days in the dataset, contains the maximum number of steps?
+```{r maxIntervalMean}
+interval_means[which.max(interval_means$mean),]
+```
 
 ## Imputing missing values
+Calculate and report the total number of missing values in the dataset (i.e. the total number of rows with NAs)
+```{r numNaRows}
+sum(!complete.cases(activity))
+```
+Find out what columns that NA shows up in
+```{r whereNAs}
+activity %>% summarise(naSteps=sum(is.na(steps)), 
+                       naDates=sum(is.na(date)), 
+                       naInterval=sum(is.na(interval)))
+```
+Ok, they are all in the "steps" column.
+Create a new dataset that is equal to the original dataset but with the missing data filled in.
+We will set each NA to be the mean number of steps for the corresponding interval (averaged over days).
+First split the set into two variables. One which contains all the rows with NA and the other which contains only complete rows.
+```{r splitOffMissingRows}
+completeIdx <- complete.cases(activity)
+missing <- activity[!completeIdx,]
+complete<- activity[completeIdx,]
+```
+Then, merge the data frame with missing data with the interval_means data frame matching on the "interval" column.
+```{r getMissingValues}
+missing <- merge(x=missing, y=interval_means, by="interval")
+```
+Then overwrite the missing values from the mean column and recombine the newly filled frame with the rows from the complete data frame.
+```{r setMeansasSteps}
+filled <- missing %>% mutate(steps=mean) %>% select(steps, date, interval)
+activity_filled <- rbind(complete, filled) %>% arrange(date, interval)
+```
+Show that the data set is still the same size
+```{r filledSize}
+str(activity_filled)
+```
+and show that all the NAs have been filled
+```{r filledNAs}
+activity_filled %>% summarise(naSteps=sum(is.na(steps)), 
+                              naDates=sum(is.na(date)), 
+                              naInterval=sum(is.na(interval)))
+```
 
+Distribution of daily steps with filled in values
+```{r distributionFilled}
+daily_steps_filled <- activity_filled %>% group_by(date) %>% summarize(steps=sum(steps, na.rm = TRUE))
+hist(daily_steps_filled$steps, col = "blue", breaks = 15,
+     xlab = "Number of daily Steps", main="Histogram of Daily Steps (Missing Set by Interval Mean)")
+```
 
+And the mean/median
+```{r filledMeanMedian}
+filled_daily_stats <- daily_steps_filled %>% summarise(mean=mean(steps), median=median(steps))
+filled_daily_stats
+```
+Filling in the missing data increased the mean and median by:
+```{r meanMedianDiff}
+filled_daily_stats - daily_stats
+```
+The mean and median calculated with NA values removed is essentially the same as when replacing the NA values with the average steps for the time interval.
 
 ## Are there differences in activity patterns between weekdays and weekends?
+Create a new factor variable in the dataset with two levels -- "weekday" and "weekend" indicating whether a given date is a weekday or weekend day.
+```{r}
+dayType <- sapply(weekdays(activity_filled$date), 
+                  function(x){ 
+                      if(x %in% c("Saturday", "Sunday"))
+                          "weekend"
+                      else
+                          "weekday"
+                      })
+dayType <- data.frame(factor(dayType))
+colnames(dayType) <- "dayType"
+activity_filled <- cbind(activity_filled, dayType)
+str(activity_filled)
+```
+Make a panel plot containing a time series plot of the 5-minute interval (x-axis) and the average number of steps taken, averaged across all weekday days or weekend days (y-axis).
+```{r plotMeanStepsPerIntervalByDayType}
+interval_means_by_dayType <- activity_filled %>% group_by(interval, dayType) %>% 
+                                summarise(steps = mean(steps))
+xyplot(steps ~ interval | dayType, data = interval_means_by_dayType, 
+       layout = c(1, 2), type="l", 
+       xlab="Interval", ylab="Number of Steps", 
+       main="Avarage Steps per 5-minute Interval of the Day (filled)")
+```
